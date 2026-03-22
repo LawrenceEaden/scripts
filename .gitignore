@@ -1,0 +1,15 @@
+# Secrets and credentials
+*.env
+*.secret
+secrets/
+
+# Windows
+desktop.ini
+Thumbs.db
+
+# Editor
+.vscode/
+*.code-workspace
+
+# Temp
+.tmp/
