@@ -11,12 +11,13 @@ param([switch]$Silent)
 $ExcludeFolders = @("Archive")
 # --------------
 
-$chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\AccountBookmarks"
+$chromeBase = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
+$chromePath = if (Test-Path "$chromeBase\AccountBookmarks") { "$chromeBase\AccountBookmarks" } else { "$chromeBase\Bookmarks" }
 $cmdpalPath = "$env:LOCALAPPDATA\Packages\Microsoft.CommandPalette_8wekyb3d8bbwe\LocalState\bookmarks.json"
 
 if (-not (Test-Path $chromePath)) {
     if (-not $Silent) {
-        Write-Error "Chrome AccountBookmarks not found at: $chromePath"
+        Write-Error "Chrome bookmarks not found at: $chromeBase"
         Read-Host "Press Enter to exit"
     }
     exit 1
