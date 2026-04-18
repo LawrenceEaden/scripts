@@ -1,8 +1,8 @@
 # sync-bookmarks.ps1
-# Syncs Chrome bookmarks (Google account-synced) to PowerToys Command Palette
+# Syncs Chrome bookmarks to PowerToys Command Palette
 # Usage: sync-bookmarks.ps1 [-Silent]
-#   Default: stops/restarts CmdPal (use when running manually mid-session)
-#   -Silent: just writes the file, no CmdPal restart (use for startup task)
+#   Default: interactive profile select, then stops/restarts CmdPal
+#   -Silent: uses saved profile selection, just writes the file (for startup task)
 
 param([switch]$Silent)
 
@@ -11,16 +11,41 @@ param([switch]$Silent)
 $ExcludeFolders = @("Archive")
 # --------------
 
-$chromeBase = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
-$chromePath = if (Test-Path "$chromeBase\AccountBookmarks") { "$chromeBase\AccountBookmarks" } else { "$chromeBase\Bookmarks" }
-$cmdpalPath = "$env:LOCALAPPDATA\Packages\Microsoft.CommandPalette_8wekyb3d8bbwe\LocalState\bookmarks.json"
+$configPath  = "$PSScriptRoot\selected-profiles.json"
+$cmdpalPath  = "$env:LOCALAPPDATA\Packages\Microsoft.CommandPalette_8wekyb3d8bbwe\LocalState\bookmarks.json"
+$chromeRoot  = "$env:LOCALAPPDATA\Google\Chrome\User Data"
 
-if (-not (Test-Path $chromePath)) {
-    if (-not $Silent) {
-        Write-Error "Chrome bookmarks not found at: $chromeBase"
-        Read-Host "Press Enter to exit"
+# Discover all Chrome profiles that have a bookmarks file
+function Get-ChromeProfiles {
+    $results = @()
+    if (-not (Test-Path $chromeRoot)) { return $results }
+    foreach ($dir in Get-ChildItem $chromeRoot -Directory | Where-Object { $_.Name -match "^(Default|Profile \d+)$" }) {
+        $bookmarksFile = $null
+        if     (Test-Path "$($dir.FullName)\AccountBookmarks") { $bookmarksFile = "$($dir.FullName)\AccountBookmarks" }
+        elseif (Test-Path "$($dir.FullName)\Bookmarks")        { $bookmarksFile = "$($dir.FullName)\Bookmarks" }
+        else { continue }
+
+        $displayName = $dir.Name
+        $email       = ""
+        $prefPath    = "$($dir.FullName)\Preferences"
+        if (Test-Path $prefPath) {
+            try {
+                $pref = Get-Content $prefPath -Raw | ConvertFrom-Json
+                if ($pref.profile.name)                       { $displayName = $pref.profile.name }
+                if ($pref.account_info -and $pref.account_info.Count -gt 0 -and $pref.account_info[0].email) {
+                    $email = $pref.account_info[0].email
+                }
+            } catch {}
+        }
+
+        $results += [PSCustomObject]@{
+            Id            = $dir.Name
+            DisplayName   = $displayName
+            Email         = $email
+            BookmarksFile = $bookmarksFile
+        }
     }
-    exit 1
+    return $results
 }
 
 # Recursively flatten bookmark URLs, building a folder path as namespace
@@ -41,27 +66,94 @@ function Get-BookmarkUrls($node, $path = "") {
     }
 }
 
-$chrome = Get-Content $chromePath -Raw | ConvertFrom-Json
+$allProfiles = Get-ChromeProfiles
 
-$bookmarks = @()
-foreach ($rootKey in @("bookmark_bar", "other", "synced")) {
-    if (-not $chrome.roots.$rootKey) { continue }
-    foreach ($child in $chrome.roots.$rootKey.children) {
-        # Skip excluded top-level folders
-        if ($child.type -eq "folder" -and $ExcludeFolders -contains $child.name) { continue }
-        $bookmarks += @(Get-BookmarkUrls $child)
+if ($allProfiles.Count -eq 0) {
+    if (-not $Silent) {
+        Write-Error "No Chrome profiles with bookmarks found under: $chromeRoot"
+        Read-Host "Press Enter to exit"
+    }
+    exit 1
+}
+
+# Load saved selection
+$savedIds = @()
+if (Test-Path $configPath) {
+    try { $savedIds = @(Get-Content $configPath -Raw | ConvertFrom-Json) } catch {}
+}
+
+if ($Silent) {
+    $profilesToSync = $allProfiles | Where-Object { $savedIds -contains $_.Id }
+    if (-not $profilesToSync) {
+        exit 0
+    }
+} else {
+    # Interactive multi-select — pre-tick saved selection (or all if first run)
+    $selected = @{}
+    foreach ($p in $allProfiles) {
+        $selected[$p.Id] = if ($savedIds.Count -gt 0) { $savedIds -contains $p.Id } else { $true }
+    }
+
+    while ($true) {
+        Clear-Host
+        Write-Host "Sync Chrome bookmarks to Command Palette"
+        Write-Host "=========================================`n"
+        Write-Host "Type a number to toggle a profile, then press Enter to confirm.`n"
+        $i = 1
+        foreach ($p in $allProfiles) {
+            $check = if ($selected[$p.Id]) { "[X]" } else { "[ ]" }
+            $label = if ($p.Email) { "$($p.DisplayName) <$($p.Email)>" } else { $p.DisplayName }
+            Write-Host "  $i. $check  $label"
+            $i++
+        }
+        Write-Host ""
+        $raw = Read-Host "Toggle (1-$($allProfiles.Count)) or Enter to confirm"
+        if ($raw -eq "") { break }
+        $num = $raw -as [int]
+        if ($num -ge 1 -and $num -le $allProfiles.Count) {
+            $id = $allProfiles[$num - 1].Id
+            $selected[$id] = -not $selected[$id]
+        }
+    }
+
+    # Persist selection
+    $newIds = @($allProfiles | Where-Object { $selected[$_.Id] } | ForEach-Object { $_.Id })
+    $newIds | ConvertTo-Json | Set-Content $configPath -Encoding UTF8
+
+    $profilesToSync = $allProfiles | Where-Object { $selected[$_.Id] }
+
+    if (-not $profilesToSync) {
+        Write-Host "No profiles selected — nothing to sync."
+        Read-Host "Press Enter to exit"
+        exit 0
     }
 }
 
-# Write bookmarks.json
-# In silent mode: just write the file (CmdPal reads it fresh on next launch)
-# In normal mode: stop CmdPal first so it doesn't overwrite our changes on exit
+# Build bookmark list from all selected profiles.
+# When multiple profiles are selected, prefix each bookmark name with the profile display name.
+$multiProfile = @($profilesToSync).Count -gt 1
+$bookmarks = @()
+
+foreach ($chromeProfile in $profilesToSync) {
+    $chrome = Get-Content $chromeProfile.BookmarksFile -Raw | ConvertFrom-Json
+    $profilePrefix = if ($multiProfile) { $chromeProfile.DisplayName } else { "" }
+
+    foreach ($rootKey in @("bookmark_bar", "other", "synced")) {
+        if (-not $chrome.roots.$rootKey) { continue }
+        foreach ($child in $chrome.roots.$rootKey.children) {
+            if ($child.type -eq "folder" -and $ExcludeFolders -icontains $child.name) { continue }
+            $basePath = if ($profilePrefix) { $profilePrefix } else { "" }
+            $bookmarks += @(Get-BookmarkUrls $child $basePath)
+        }
+    }
+}
+
+# Stop CmdPal before writing so it can't overwrite the file on exit
 if (-not $Silent) {
     $cmdpalProc = Get-Process -Name "Microsoft.CmdPal.UI" -ErrorAction SilentlyContinue
     if ($cmdpalProc) {
         Write-Host "Stopping Command Palette..."
         Stop-Process -InputObject $cmdpalProc -Force
-        # Wait until the process is fully gone so it can't overwrite our file on exit
         $cmdpalProc.WaitForExit(5000) | Out-Null
     }
 }
@@ -70,7 +162,7 @@ $output = [PSCustomObject]@{ Data = $bookmarks }
 $output | ConvertTo-Json -Depth 4 | Set-Content $cmdpalPath -Encoding UTF8
 
 if (-not $Silent) {
-    Write-Host "Synced $($bookmarks.Count) bookmarks to Command Palette."
+    Write-Host "Synced $($bookmarks.Count) bookmarks from $(@($profilesToSync).Count) profile(s)."
     Write-Host "Restarting Command Palette..."
     Start-Process "shell:AppsFolder\Microsoft.CommandPalette_8wekyb3d8bbwe!App"
     Start-Sleep -Milliseconds 500
