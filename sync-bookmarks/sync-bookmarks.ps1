@@ -1,4 +1,4 @@
-# sync-bookmarks.ps1
+﻿# sync-bookmarks.ps1
 # Syncs Chrome bookmarks to PowerToys Command Palette
 # Usage: sync-bookmarks.ps1 [-Silent]
 #   Default: interactive profile select, then stops/restarts CmdPal
@@ -88,7 +88,7 @@ if ($Silent) {
         exit 0
     }
 } else {
-    # Interactive multi-select — pre-tick saved selection (or all if first run)
+    # Interactive multi-select - pre-tick saved selection (or all if first run)
     $selected = @{}
     foreach ($p in $allProfiles) {
         $selected[$p.Id] = if ($savedIds.Count -gt 0) { $savedIds -contains $p.Id } else { $true }
@@ -123,7 +123,7 @@ if ($Silent) {
     $profilesToSync = $allProfiles | Where-Object { $selected[$_.Id] }
 
     if (-not $profilesToSync) {
-        Write-Host "No profiles selected — nothing to sync."
+        Write-Host "No profiles selected - nothing to sync."
         Read-Host "Press Enter to exit"
         exit 0
     }
@@ -167,3 +167,4 @@ if (-not $Silent) {
     Start-Process "shell:AppsFolder\Microsoft.CommandPalette_8wekyb3d8bbwe!App"
     Start-Sleep -Milliseconds 500
 }
+
