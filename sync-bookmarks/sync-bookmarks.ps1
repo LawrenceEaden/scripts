@@ -38,9 +38,11 @@ function Get-ChromeProfiles {
             } catch {}
         }
 
+        $domain = if ($email -match "@(.+)$") { $Matches[1] } else { $displayName }
+
         $results += [PSCustomObject]@{
             Id            = $dir.Name
-            DisplayName   = $displayName
+            DisplayName   = $domain
             Email         = $email
             BookmarksFile = $bookmarksFile
         }
