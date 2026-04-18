@@ -65,7 +65,7 @@ function Register-ChromeProfileProtocol {
 # Recursively flatten bookmark URLs, building a folder path as namespace
 function Get-BookmarkUrls($node, $path = "", $profileId = "") {
     if ($node.type -eq "url") {
-        $name = if ($path) { "$path / $($node.name)" } else { $node.name }
+        $name = if ($path) { "$path › $($node.name)" } else { $node.name }
         $url  = if ($profileId) {
             "chrome-profile:///$([System.Uri]::EscapeDataString($profileId))/$([System.Uri]::EscapeDataString($node.url))"
         } else {
@@ -78,7 +78,7 @@ function Get-BookmarkUrls($node, $path = "", $profileId = "") {
         }
     }
     if ($node.children) {
-        $newPath = if ($path) { "$path / $($node.name)" } else { $node.name }
+        $newPath = if ($path) { "$path › $($node.name)" } else { $node.name }
         foreach ($child in $node.children) {
             Get-BookmarkUrls $child $newPath $profileId
         }
@@ -189,4 +189,5 @@ if (-not $Silent) {
     Start-Process "shell:AppsFolder\Microsoft.CommandPalette_8wekyb3d8bbwe!App"
     Start-Sleep -Milliseconds 500
 }
+
 
