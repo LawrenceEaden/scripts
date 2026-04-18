@@ -48,20 +48,37 @@ function Get-ChromeProfiles {
     return $results
 }
 
+# Register chrome-profile:// protocol handler for the current user (no admin required)
+function Register-ChromeProfileProtocol {
+    $handlerPath = "$PSScriptRoot\chrome-profile-handler.ps1"
+    $cmd = "powershell.exe -WindowStyle Hidden -NonInteractive -NoProfile -ExecutionPolicy Bypass -File `"$handlerPath`" `"%1`""
+    $regBase = "HKCU:\Software\Classes\chrome-profile"
+    New-Item -Path $regBase -Force | Out-Null
+    Set-ItemProperty -Path $regBase -Name "(default)" -Value "URL:Chrome Profile"
+    New-ItemProperty -Path $regBase -Name "URL Protocol" -Value "" -Force | Out-Null
+    New-Item -Path "$regBase\shell\open\command" -Force | Out-Null
+    Set-ItemProperty -Path "$regBase\shell\open\command" -Name "(default)" -Value $cmd
+}
+
 # Recursively flatten bookmark URLs, building a folder path as namespace
-function Get-BookmarkUrls($node, $path = "") {
+function Get-BookmarkUrls($node, $path = "", $profileId = "") {
     if ($node.type -eq "url") {
         $name = if ($path) { "$path / $($node.name)" } else { $node.name }
+        $url  = if ($profileId) {
+            "chrome-profile://$profileId/$([System.Uri]::EscapeDataString($node.url))"
+        } else {
+            $node.url
+        }
         [PSCustomObject]@{
             Id       = [System.Guid]::NewGuid().ToString()
             Name     = $name
-            Bookmark = $node.url
+            Bookmark = $url
         }
     }
     if ($node.children) {
         $newPath = if ($path) { "$path / $($node.name)" } else { $node.name }
         foreach ($child in $node.children) {
-            Get-BookmarkUrls $child $newPath
+            Get-BookmarkUrls $child $newPath $profileId
         }
     }
 }
@@ -130,20 +147,23 @@ if ($Silent) {
 }
 
 # Build bookmark list from all selected profiles.
-# When multiple profiles are selected, prefix each bookmark name with the profile display name.
+# When multiple profiles are selected, prefix names with profile display name
+# and use chrome-profile:// URLs so each bookmark opens in the correct profile.
 $multiProfile = @($profilesToSync).Count -gt 1
 $bookmarks = @()
+
+if ($multiProfile) { Register-ChromeProfileProtocol }
 
 foreach ($chromeProfile in $profilesToSync) {
     $chrome = Get-Content $chromeProfile.BookmarksFile -Raw | ConvertFrom-Json
     $profilePrefix = if ($multiProfile) { $chromeProfile.DisplayName } else { "" }
+    $profileId     = if ($multiProfile) { $chromeProfile.Id } else { "" }
 
     foreach ($rootKey in @("bookmark_bar", "other", "synced")) {
         if (-not $chrome.roots.$rootKey) { continue }
         foreach ($child in $chrome.roots.$rootKey.children) {
             if ($child.type -eq "folder" -and $ExcludeFolders -icontains $child.name) { continue }
-            $basePath = if ($profilePrefix) { $profilePrefix } else { "" }
-            $bookmarks += @(Get-BookmarkUrls $child $basePath)
+            $bookmarks += @(Get-BookmarkUrls $child $profilePrefix $profileId)
         }
     }
 }
