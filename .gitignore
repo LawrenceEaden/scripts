@@ -11,5 +11,8 @@ Thumbs.db
 .vscode/
 *.code-workspace
 
+# User-specific config
+selected-profiles.json
+
 # Temp
 .tmp/
