@@ -52,8 +52,8 @@ function Get-ChromeProfiles {
 
 # Register chrome-profile:// protocol handler for the current user (no admin required)
 function Register-ChromeProfileProtocol {
-    $handlerPath = "$PSScriptRoot\chrome-profile-handler.exe"
-    $cmd = "`"$handlerPath`" `"%1`""
+    $handlerPath = "$PSScriptRoot\chrome-profile-handler.ps1"
+    $cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$handlerPath`" `"%1`""
     $regBase = "HKCU:\Software\Classes\chrome-profile"
     New-Item -Path $regBase -Force | Out-Null
     Set-ItemProperty -Path $regBase -Name "(default)" -Value "URL:Chrome Profile"
