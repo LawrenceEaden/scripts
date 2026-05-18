@@ -25,24 +25,23 @@ function Get-ChromeProfiles {
         elseif (Test-Path "$($dir.FullName)\Bookmarks")        { $bookmarksFile = "$($dir.FullName)\Bookmarks" }
         else { continue }
 
-        $displayName = $dir.Name
-        $email       = ""
-        $prefPath    = "$($dir.FullName)\Preferences"
+        $email    = ""
+        $prefPath = "$($dir.FullName)\Preferences"
         if (Test-Path $prefPath) {
             try {
                 $pref = Get-Content $prefPath -Raw | ConvertFrom-Json
-                if ($pref.profile.name)                       { $displayName = $pref.profile.name }
                 if ($pref.account_info -and $pref.account_info.Count -gt 0 -and $pref.account_info[0].email) {
                     $email = $pref.account_info[0].email
                 }
             } catch {}
         }
 
-        $domain = if ($email -match "@(.+)$") { $Matches[1] } else { $displayName }
+        # profile.name is unreliable: enterprise policy can lock it to the email or a placeholder, so derive default from the email domain instead.
+        $defaultName = if ($email -match "@(.+)$") { $Matches[1] } else { $dir.Name }
 
         $results += [PSCustomObject]@{
             Id            = $dir.Name
-            DisplayName   = $domain
+            DefaultName   = $defaultName
             Email         = $email
             BookmarksFile = $bookmarksFile
         }
@@ -95,10 +94,32 @@ if ($allProfiles.Count -eq 0) {
     exit 1
 }
 
-# Load saved selection
-$savedIds = @()
+# Load saved config. Supported formats:
+#   legacy: ["Default", "Profile 1"]                                  (array of selected ids)
+#   current: { "Default": { "name": "Work" }, "Profile 1": { ... } }  (selected id -> { name })
+$savedIds   = @()
+$savedNames = @{}
 if (Test-Path $configPath) {
-    try { $savedIds = @(Get-Content $configPath -Raw | ConvertFrom-Json) } catch {}
+    try {
+        $raw = Get-Content $configPath -Raw | ConvertFrom-Json
+        if ($raw -is [System.Array]) {
+            $savedIds = @($raw)
+        } elseif ($raw) {
+            foreach ($prop in $raw.PSObject.Properties) {
+                $savedIds += $prop.Name
+                if ($prop.Value -and $prop.Value.name) { $savedNames[$prop.Name] = [string]$prop.Value.name }
+            }
+        }
+    } catch {}
+}
+
+$aliases = @{}
+foreach ($k in $savedNames.Keys) { $aliases[$k] = $savedNames[$k] }
+
+# Effective display name: alias overrides default-from-domain
+function Get-EffectiveName($profile, $aliases) {
+    if ($aliases[$profile.Id]) { return $aliases[$profile.Id] }
+    return $profile.DefaultName
 }
 
 if ($Silent) {
@@ -117,27 +138,46 @@ if ($Silent) {
         Clear-Host
         Write-Host "Sync Chrome bookmarks to Command Palette"
         Write-Host "=========================================`n"
-        Write-Host "Type a number to toggle a profile, then press Enter to confirm.`n"
+        Write-Host "Type a number to toggle a profile, 'r<n>' to rename, Enter to confirm.`n"
         $i = 1
         foreach ($p in $allProfiles) {
             $check = if ($selected[$p.Id]) { "[X]" } else { "[ ]" }
-            $label = if ($p.Email) { "$($p.DisplayName) <$($p.Email)>" } else { $p.DisplayName }
+            $name  = Get-EffectiveName $p $aliases
+            $label = if ($p.Email) { "$name <$($p.Email)>" } else { $name }
             Write-Host "  $i. $check  $label"
             $i++
         }
         Write-Host ""
-        $raw = Read-Host "Toggle (1-$($allProfiles.Count)) or Enter to confirm"
-        if ($raw -eq "") { break }
-        $num = $raw -as [int]
+        $rawInput = Read-Host "Toggle (1-$($allProfiles.Count)), r<n> to rename, Enter to confirm"
+        if ($rawInput -eq "") { break }
+        if ($rawInput -match "^\s*r\s*(\d+)\s*$") {
+            $num = [int]$Matches[1]
+            if ($num -ge 1 -and $num -le $allProfiles.Count) {
+                $target  = $allProfiles[$num - 1]
+                $current = Get-EffectiveName $target $aliases
+                Write-Host ""
+                $new = Read-Host "New name for profile $num (currently '$current'; blank to reset to domain default)"
+                if ($new -eq "") { $aliases.Remove($target.Id) | Out-Null } else { $aliases[$target.Id] = $new }
+            }
+            continue
+        }
+        $num = $rawInput -as [int]
         if ($num -ge 1 -and $num -le $allProfiles.Count) {
             $id = $allProfiles[$num - 1].Id
             $selected[$id] = -not $selected[$id]
         }
     }
 
-    # Persist selection
-    $newIds = @($allProfiles | Where-Object { $selected[$_.Id] } | ForEach-Object { $_.Id })
-    $newIds | ConvertTo-Json | Set-Content $configPath -Encoding UTF8
+    # Persist as { id: { name } } for every selected profile
+    $configOut = [ordered]@{}
+    foreach ($p in $allProfiles) {
+        if ($selected[$p.Id]) {
+            $entry = [ordered]@{}
+            if ($aliases[$p.Id]) { $entry["name"] = $aliases[$p.Id] }
+            $configOut[$p.Id] = $entry
+        }
+    }
+    ([PSCustomObject]$configOut) | ConvertTo-Json -Depth 4 | Set-Content $configPath -Encoding UTF8
 
     $profilesToSync = $allProfiles | Where-Object { $selected[$_.Id] }
 
@@ -148,22 +188,20 @@ if ($Silent) {
     }
 }
 
-# Build bookmark list from all selected profiles.
-# When multiple profiles are selected, prefix names with profile display name
-# and use chrome-profile:// URLs so each bookmark opens in the correct profile.
-$multiProfile = @($profilesToSync).Count -gt 1
+# Use chrome-profile:// URLs whenever multiple Chrome profiles exist, so bookmarks always open in the right profile (not whichever window is focused).
+$multiProfile = @($allProfiles).Count -gt 1
 $bookmarks = @()
 
 if ($multiProfile) { Register-ChromeProfileProtocol }
 
 foreach ($chromeProfile in $profilesToSync) {
     $chrome = Get-Content $chromeProfile.BookmarksFile -Raw | ConvertFrom-Json
-    $profilePrefix = if ($multiProfile) { $chromeProfile.DisplayName } else { "" }
+    $profilePrefix = if ($multiProfile -and @($profilesToSync).Count -gt 1) { Get-EffectiveName $chromeProfile $aliases } else { "" }
     $profileId     = if ($multiProfile) { $chromeProfile.Id } else { "" }
 
-    foreach ($rootKey in @("bookmark_bar", "other", "synced")) {
-        if (-not $chrome.roots.$rootKey) { continue }
-        foreach ($child in $chrome.roots.$rootKey.children) {
+    # Only sync the bookmarks bar - "Other Bookmarks" and "Synced" tend to accumulate orphan URLs that aren't intentionally curated.
+    if ($chrome.roots.bookmark_bar) {
+        foreach ($child in $chrome.roots.bookmark_bar.children) {
             if ($child.type -eq "folder" -and $ExcludeFolders -icontains $child.name) { continue }
             $bookmarks += @(Get-BookmarkUrls $child $profilePrefix $profileId)
         }

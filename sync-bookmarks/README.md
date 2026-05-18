@@ -29,8 +29,19 @@ No admin rights required at any step.
 ## Using it
 
 - **Re-sync after adding new bookmarks**: Start Menu → "sync-bookmarks" (or just run it again from PowerShell). Tick/untick profiles by typing their number, hit Enter to confirm.
+- **Rename a profile**: in the picker, type `r<n>` (e.g. `r2`) to set a custom display name. Useful when Chrome's profile name is locked by enterprise policy. Blank input resets to the email-domain default.
 - **Search bookmarks**: open Command Palette and type to filter. Bookmarks appear under the profile name when you have more than one selected.
 - **Exclude folders**: edit `$ExcludeFolders` near the top of `sync-bookmarks.ps1`. Defaults to excluding `Archive`.
+
+Only the **Bookmarks bar** is synced — "Other Bookmarks" and "Synced" are skipped. Drop anything you want available in Command Palette onto the bar (folders are fine — they become namespaces like `Work › Tools › Jira`).
+
+## Update
+
+Re-run the install command — it overwrites the scripts in place and keeps your saved profile selection and aliases.
+
+```powershell
+iwr https://raw.githubusercontent.com/LawrenceEaden/scripts/main/sync-bookmarks/install.ps1 | iex
+```
 
 ## Uninstall
 
