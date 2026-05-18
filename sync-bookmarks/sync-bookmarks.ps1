@@ -51,14 +51,27 @@ function Get-ChromeProfiles {
 
 # Register chrome-profile:// protocol handler for the current user (no admin required)
 function Register-ChromeProfileProtocol {
-    $handlerPath = "$PSScriptRoot\chrome-profile-handler.ps1"
-    $cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$handlerPath`" `"%1`""
+    # Invoke via wscript.exe + launcher.vbs so no console window flashes.
+    $launcher = "$PSScriptRoot\launcher.vbs"
+    $cmd = "wscript.exe `"$launcher`" `"%1`""
     $regBase = "HKCU:\Software\Classes\chrome-profile"
     New-Item -Path $regBase -Force | Out-Null
     Set-ItemProperty -Path $regBase -Name "(default)" -Value "URL:Chrome Profile"
     New-ItemProperty -Path $regBase -Name "URL Protocol" -Value "" -Force | Out-Null
     New-Item -Path "$regBase\shell\open\command" -Force | Out-Null
     Set-ItemProperty -Path "$regBase\shell\open\command" -Name "(default)" -Value $cmd
+
+    # DefaultIcon -> chrome.exe so Command Palette (and any other shell consumer) shows Chrome's icon for these bookmarks instead of falling back to wscript's icon.
+    $chromePath = $null
+    try {
+        $item = Get-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe' -ErrorAction Stop
+        $val = $item.GetValue('')
+        if ($val) { $chromePath = $val }
+    } catch {}
+    if ($chromePath) {
+        New-Item -Path "$regBase\DefaultIcon" -Force | Out-Null
+        Set-ItemProperty -Path "$regBase\DefaultIcon" -Name "(default)" -Value ('"{0}",0' -f $chromePath)
+    }
 }
 
 # Recursively flatten bookmark URLs, building a folder path as namespace

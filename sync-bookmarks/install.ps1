@@ -9,7 +9,8 @@ $files = @(
     'sync-bookmarks.ps1',
     'sync-bookmarks.bat',
     'sync-bookmarks.ico',
-    'chrome-profile-handler.ps1'
+    'chrome-profile-handler.ps1',
+    'launcher.vbs'
 )
 
 Write-Host "Installing sync-bookmarks to $dst"
